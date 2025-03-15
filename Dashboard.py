@@ -191,6 +191,7 @@ def format_positions(positions: List[dict]) -> List[dict]:
         pair = pos.get("pair", "")
         active_pos = pos.get("active_pos", 0.0)
         updated_at = pos.get("updated_at", 0)
+        avg_price = pos.get("avg_price", None)  # Extract filled price
 
         # Determine side based on active_pos
         if active_pos > 0:
@@ -207,6 +208,7 @@ def format_positions(positions: List[dict]) -> List[dict]:
             "Pair": pair,
             "Active Pos": active_pos,
             "Side": side,
+            "Filled Price": avg_price,
             "Updated (IST)": updated_at_str
         })
     return table_data
@@ -250,26 +252,27 @@ def main():
 
     st.write("---")
 
-    # Close All Positions button: only ask confirmation if positions exist
+    # Render confirmation checkbox outside the button so its state is preserved
+    confirm_close = st.checkbox("Are you sure you want to close all positions?", key="confirm_close")
+
+    # Close All Positions button
     if st.button("Close All Positions"):
         if not st.session_state["positions"]:
             st.warning("No open positions to close!")
+        elif not confirm_close:
+            st.warning("Please check the box to confirm closing all positions.")
         else:
-            confirm_close = st.checkbox("Are you sure you want to close all positions?")
-            if confirm_close:
-                st.write("Closing all positions...")
-                results = close_all_positions(api_url, api_key, api_secret, paper_trade=False)
-                st.write("Close results:")
-                st.json(results)
-                # Refresh positions after closing
-                st.session_state["positions"] = list_positions(api_url, api_key, api_secret) or []
-                if st.session_state["positions"]:
-                    formatted = format_positions(st.session_state["positions"])
-                    st.table(formatted)
-                else:
-                    st.info("No open positions remain.")
+            st.write("Closing all positions...")
+            results = close_all_positions(api_url, api_key, api_secret, paper_trade=False)
+            st.write("Close results:")
+            st.json(results)
+            # Refresh positions after closing
+            st.session_state["positions"] = list_positions(api_url, api_key, api_secret) or []
+            if st.session_state["positions"]:
+                formatted = format_positions(st.session_state["positions"])
+                st.table(formatted)
             else:
-                st.warning("Please check the box to confirm closing all positions.")
+                st.info("No open positions remain.")
 
 if __name__ == "__main__":
     main()
