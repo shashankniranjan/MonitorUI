@@ -44,7 +44,7 @@ def list_positions(url: str, api_key: str, api_secret: str):
 
         resp = requests.post(
             f"{url}/derivatives/futures/positions/",
-            data=json_body,  # or use json=body if required
+            data=json_body,  # or use json=body if required by the API
             headers=get_header(api_key, signature),
             timeout=10
         )
@@ -65,11 +65,18 @@ def close_position_by_position_id(
         api_key: str,
         api_secret: str,
         url: str,
-        position_id: str
+        position_id: str,
+        symbol: str
 ):
     """
     Closes a specific position using the endpoint:
     f"{url}/derivatives/futures/positions/exit"
+
+    BUY_OR_SELL: 'buy' or 'sell' side of the position (to close LONG, use 'sell'; to close SHORT, use 'buy')
+    quantity: number of units to close
+    paper_trade: if True, no real API call is made
+    position_id: ID of the position to close
+    symbol: symbol to close (e.g. 'BTCUSDT')
     """
     if paper_trade:
         st.info(f"Paper trade mode: Position {position_id} would have been closed.")
@@ -77,10 +84,15 @@ def close_position_by_position_id(
 
     try:
         timestamp = int(round(time.time() * 1000))
+        # Build payload with additional required fields
         body = {
             "timestamp": timestamp,
-            "id": position_id
-            # Add other fields if needed by the API (e.g., symbol, side, quantity)
+            "id": position_id,
+            "symbol": symbol,
+            "side": BUY_OR_SELL,
+            "type": "MARKET",
+            "quantity": str(quantity),
+            "reduceOnly": True
         }
         json_body = json.dumps(body, separators=(',', ':'))
         signature = getSignature(json_body, api_secret)
@@ -91,6 +103,8 @@ def close_position_by_position_id(
             headers=get_header(api_key, signature),
             timeout=10
         )
+        st.write("Close response status:", resp.status_code)
+        st.write("Close response text:", resp.text)
         resp.raise_for_status()
         response_json = resp.json()
         if response_json.get('message'):
@@ -110,10 +124,10 @@ def close_all_positions(
         paper_trade: bool = False
 ) -> List[dict]:
     """
-    1) Lists all positions
-    2) Determines side ('buy'/'sell') from 'active_pos'
-    3) Calls close_position_by_position_id for each non-zero position
-    4) Returns a list of results
+    1) Lists all positions.
+    2) For each position with non-zero active_pos, determines side from active_pos and extracts symbol.
+    3) Calls close_position_by_position_id for each.
+    4) Returns a list of results.
     """
     results = []
     all_positions = list_positions(url, api_key, api_secret)
@@ -123,14 +137,19 @@ def close_all_positions(
     for pos in all_positions:
         position_id = pos.get("id")
         active_pos = pos.get("active_pos", 0.0)
-
+        pair = pos.get("pair", "")  # e.g., "B-BTC_USDT"
         if not position_id:
             continue
+
+        # Extract symbol: remove leading "B-" if present.
+        symbol = pair[2:] if pair.startswith("B-") else pair
+
+        # Determine side and quantity based on active_pos
         if active_pos > 0:
-            side = "sell"             # Close a long position
+            side = "sell"  # Closing a LONG requires selling.
             quantity = active_pos
         elif active_pos < 0:
-            side = "buy"              # Close a short position
+            side = "buy"   # Closing a SHORT requires buying.
             quantity = abs(active_pos)
         else:
             continue  # Nothing to close if active_pos is zero
@@ -142,7 +161,8 @@ def close_all_positions(
             api_key=api_key,
             api_secret=api_secret,
             url=url,
-            position_id=position_id
+            position_id=position_id,
+            symbol=symbol
         )
         results.append({"position_id": position_id, "close_result": result})
     return results
@@ -152,7 +172,7 @@ def close_all_positions(
 #############################################
 def to_ist(epoch_ms: int) -> str:
     """
-    Convert epoch ms to a readable IST time string.
+    Convert epoch milliseconds to a readable IST time string.
     """
     if not epoch_ms:
         return ""
@@ -230,7 +250,7 @@ def main():
 
     st.write("---")
 
-    # Close All Positions button with confirmation and check for open positions
+    # Close All Positions button: only ask confirmation if positions exist
     if st.button("Close All Positions"):
         if not st.session_state["positions"]:
             st.warning("No open positions to close!")
@@ -239,13 +259,15 @@ def main():
             if confirm_close:
                 st.write("Closing all positions...")
                 results = close_all_positions(api_url, api_key, api_secret, paper_trade=False)
-                if results:
-                    st.write("Close results:")
-                    st.json(results)
-                    # Refresh positions after closing
-                    st.session_state["positions"] = list_positions(api_url, api_key, api_secret) or []
+                st.write("Close results:")
+                st.json(results)
+                # Refresh positions after closing
+                st.session_state["positions"] = list_positions(api_url, api_key, api_secret) or []
+                if st.session_state["positions"]:
+                    formatted = format_positions(st.session_state["positions"])
+                    st.table(formatted)
                 else:
-                    st.info("No positions were closed (maybe none were open).")
+                    st.info("No open positions remain.")
             else:
                 st.warning("Please check the box to confirm closing all positions.")
 
