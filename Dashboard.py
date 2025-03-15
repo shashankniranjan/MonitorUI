@@ -44,13 +44,12 @@ def list_positions(url: str, api_key: str, api_secret: str):
 
         resp = requests.post(
             f"{url}/derivatives/futures/positions/",
-            data=json_body,  # or json=body if the API expects JSON
+            data=json_body,  # or use json=body if required
             headers=get_header(api_key, signature),
             timeout=10
         )
         resp.raise_for_status()
-
-        positions = resp.json()  # Could be a list of dicts or a single dict
+        positions = resp.json()
         return positions
     except Exception as e:
         st.error(f"Error fetching positions: {e}")
@@ -71,11 +70,6 @@ def close_position_by_position_id(
     """
     Closes a specific position using the endpoint:
     f"{url}/derivatives/futures/positions/exit"
-
-    BUY_OR_SELL: 'buy' or 'sell' side of the position
-    quantity: how many units to close
-    paper_trade: if True, do not actually hit the API (just a mock)
-    position_id: ID of the position to close
     """
     if paper_trade:
         st.info(f"Paper trade mode: Position {position_id} would have been closed.")
@@ -86,7 +80,7 @@ def close_position_by_position_id(
         body = {
             "timestamp": timestamp,
             "id": position_id
-            # You might also need "symbol", "side", "quantity" etc. depending on the API
+            # Add other fields if needed by the API (e.g., symbol, side, quantity)
         }
         json_body = json.dumps(body, separators=(',', ':'))
         signature = getSignature(json_body, api_secret)
@@ -99,7 +93,6 @@ def close_position_by_position_id(
         )
         resp.raise_for_status()
         response_json = resp.json()
-
         if response_json.get('message'):
             return {"status": "success", "details": response_json}
         else:
@@ -129,18 +122,18 @@ def close_all_positions(
 
     for pos in all_positions:
         position_id = pos.get("id")
-        active_pos = pos.get("active_pos", 0.0)  # could be float or int
+        active_pos = pos.get("active_pos", 0.0)
 
         if not position_id:
             continue
         if active_pos > 0:
-            side = "sell"             # close a long
+            side = "sell"             # Close a long position
             quantity = active_pos
         elif active_pos < 0:
-            side = "buy"              # close a short
+            side = "buy"              # Close a short position
             quantity = abs(active_pos)
         else:
-            continue  # 0 means no position to close
+            continue  # Nothing to close if active_pos is zero
 
         result = close_position_by_position_id(
             BUY_OR_SELL=side,
@@ -152,7 +145,6 @@ def close_all_positions(
             position_id=position_id
         )
         results.append({"position_id": position_id, "close_result": result})
-
     return results
 
 #############################################
@@ -160,7 +152,7 @@ def close_all_positions(
 #############################################
 def to_ist(epoch_ms: int) -> str:
     """
-    Convert the 'updated_at' (ms epoch) to a readable string in IST.
+    Convert epoch ms to a readable IST time string.
     """
     if not epoch_ms:
         return ""
@@ -170,13 +162,9 @@ def to_ist(epoch_ms: int) -> str:
     return dt_ist.strftime("%Y-%m-%d %H:%M:%S")
 
 #############################################
-# 5) Format positions into a table
+# 5) Format positions into a table-friendly structure
 #############################################
 def format_positions(positions: List[dict]) -> List[dict]:
-    """
-    Turn the raw positions JSON into a list of dicts with
-    columns: [id, pair, side, active_pos, updated_at_ist, ...].
-    """
     table_data = []
     for pos in positions:
         pid = pos.get("id")
@@ -184,7 +172,7 @@ def format_positions(positions: List[dict]) -> List[dict]:
         active_pos = pos.get("active_pos", 0.0)
         updated_at = pos.get("updated_at", 0)
 
-        # Determine side from active_pos
+        # Determine side based on active_pos
         if active_pos > 0:
             side = "LONG"
         elif active_pos < 0:
@@ -192,7 +180,6 @@ def format_positions(positions: List[dict]) -> List[dict]:
         else:
             side = "NONE"
 
-        # Convert updated_at to IST
         updated_at_str = to_ist(updated_at)
 
         table_data.append({
@@ -210,25 +197,26 @@ def format_positions(positions: List[dict]) -> List[dict]:
 def main():
     st.title("CoinDCX Futures Dashboard")
 
-    # Change to your real base URL if needed
-    api_url = st.text_input("API Base URL", "https://api.coindcx.com/exchange/v1")
-    # In production, use st.secrets or environment vars, but for this example:
+    # Hard-coded API Base URL (removed from UI)
+    api_url = "https://api.coindcx.com/exchange/v1"
+
+    # Load API credentials from secrets
     api_key = st.secrets["connections"]["api_key"]
     api_secret = st.secrets["connections"]["api_secret"]
 
-    # On first load, fetch positions automatically
+    # Fetch positions on first load if not in session state
     if "positions" not in st.session_state:
         st.session_state["positions"] = list_positions(api_url, api_key, api_secret) or []
 
-    # Show open positions (table view) immediately
+    # Display open positions as a table
     if st.session_state["positions"]:
         formatted = format_positions(st.session_state["positions"])
         st.write("Open Positions:")
         st.table(formatted)
     else:
-        st.info("No open positions found or error occurred.")
+        st.info("No open positions found.")
 
-    # Refresh button to re-fetch the positions
+    # Refresh positions button
     if st.button("Refresh"):
         new_positions = list_positions(api_url, api_key, api_secret)
         if new_positions:
@@ -236,28 +224,30 @@ def main():
             st.success("Positions refreshed!")
         else:
             st.info("No open positions found.")
-        # Re-display the updated table
         if st.session_state["positions"]:
             formatted = format_positions(st.session_state["positions"])
             st.table(formatted)
 
     st.write("---")
 
-    # Close all positions (with confirmation)
+    # Close All Positions button with confirmation and check for open positions
     if st.button("Close All Positions"):
-        # Step 1: Ask for confirmation via a checkbox or a second button
-        confirm_close = st.checkbox("Are you sure you want to CLOSE ALL positions?")
-        if confirm_close:
-            # Step 2: Actually call close_all_positions
-            st.write("Closing all positions...")
-            results = close_all_positions(api_url, api_key, api_secret, paper_trade=False)
-            if results:
-                st.write("Close results:")
-                st.json(results)
-            else:
-                st.info("No positions were closed (maybe none were open).")
+        if not st.session_state["positions"]:
+            st.warning("No open positions to close!")
         else:
-            st.warning("Please check the box to confirm closure of ALL positions.")
+            confirm_close = st.checkbox("Are you sure you want to close all positions?")
+            if confirm_close:
+                st.write("Closing all positions...")
+                results = close_all_positions(api_url, api_key, api_secret, paper_trade=False)
+                if results:
+                    st.write("Close results:")
+                    st.json(results)
+                    # Refresh positions after closing
+                    st.session_state["positions"] = list_positions(api_url, api_key, api_secret) or []
+                else:
+                    st.info("No positions were closed (maybe none were open).")
+            else:
+                st.warning("Please check the box to confirm closing all positions.")
 
 if __name__ == "__main__":
     main()
